@@ -1,3 +1,5 @@
+![Banner](banner.png)
+
 # file-content-obfuscator
 Applies basic obfuscation techniques (e.g., substitution ciphers, character shuffling) to a file's content, making it less readable without significantly altering functionality. Primarily for protecting intellectual property in scripts and configuration files. - Focused on File operations and analysis
 
