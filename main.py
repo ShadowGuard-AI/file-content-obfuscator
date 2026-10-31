@@ -18,6 +18,8 @@ def setup_argparse():
     parser.add_argument("-s", "--substitution", action="store_true", help="Enable substitution cipher obfuscation.")
     parser.add_argument("-r", "--shuffle", action="store_true", help="Enable character shuffling obfuscation.")
     parser.add_argument("-k", "--key", type=int, default=42, help="Key used for the substitution cipher. Default is 42.")
+    parser.add_argument("--seed", type=int, default=None, help="Seed for character shuffling. When none is given, one is generated and printed in the run log line.")
+    parser.add_argument("--reverse", action="store_true", help="Reverse a shuffle made with -r and the same --seed, restoring the original order.")
     parser.add_argument("-l", "--log_level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level.")
     return parser
 
@@ -37,22 +39,24 @@ def substitute_chars(content, key):
         obfuscated_content += chr(ord(char) + key)  # Simple substitution
     return obfuscated_content
 
-def shuffle_chars(content):
-    """
-    Shuffles the characters in the content.
-
-    Args:
-        content (str): The content to obfuscate.
-
-    Returns:
-        str: The obfuscated content.
-    """
-    content_list = list(content)
-    random.shuffle(content_list)
-    return ''.join(content_list)
+def shuffle_chars(content, seed):
+    rng = random.Random(seed)
+    indices = list(range(len(content)))
+    rng.shuffle(indices)
+    return ''.join(content[i] for i in indices)
 
 
-def obfuscate_file(input_file_path, output_file_path, substitution=False, shuffle=False, key=42):
+def unshuffle_chars(content, seed):
+    rng = random.Random(seed)
+    indices = list(range(len(content)))
+    rng.shuffle(indices)
+    restored = [''] * len(content)
+    for new_pos, old_pos in enumerate(indices):
+        restored[old_pos] = content[new_pos]
+    return ''.join(restored)
+
+
+def obfuscate_file(input_file_path, output_file_path, substitution=False, shuffle=False, key=42, seed=None, reverse=False):
     """
     Obfuscates the content of a file using substitution and/or shuffling.
 
@@ -75,11 +79,30 @@ def obfuscate_file(input_file_path, output_file_path, substitution=False, shuffl
         if not input_file_path.exists():
             raise FileNotFoundError(f"Input file not found: {input_file_path}")
 
+        if os.path.realpath(input_file_path) == os.path.realpath(output_file_path):
+            raise ValueError(f"Refusing to overwrite the input file: {output_file_path}")
+
+        if reverse and not shuffle:
+            raise ValueError("--reverse requires -r (shuffle) and the --seed used to shuffle.")
+
         if not substitution and not shuffle:
             raise ValueError("No obfuscation method selected.  Use -s or -r to enable.")
 
         with open(input_file_path, 'r') as infile:
             content = infile.read()
+
+        if not content:
+            raise ValueError("No content to obfuscate: input file is empty.")
+
+        if substitution:
+            if content:
+                highest = max(ord(c) for c in content)
+                lowest = min(ord(c) for c in content)
+                if highest + key > 0x10FFFF or lowest + key < 0:
+                    raise ValueError(
+                        f"Substitution key {key} is out of range for this content: "
+                        f"it would move a character outside the valid range 0 to 1114111."
+                    )
 
         obfuscated_content = content
 
@@ -88,8 +111,16 @@ def obfuscate_file(input_file_path, output_file_path, substitution=False, shuffl
             logging.info("Applied substitution cipher.")
 
         if shuffle:
-            obfuscated_content = shuffle_chars(obfuscated_content)
-            logging.info("Applied character shuffling.")
+            if seed is None:
+                if reverse:
+                    raise ValueError("Reversing a shuffle requires the --seed used to shuffle.")
+                seed = random.SystemRandom().randrange(0, 2**31)
+            if reverse:
+                obfuscated_content = unshuffle_chars(obfuscated_content, seed)
+                logging.info(f"Reversed character shuffling with seed: {seed}")
+            else:
+                obfuscated_content = shuffle_chars(obfuscated_content, seed)
+                logging.info(f"Applied character shuffling with seed: {seed}")
 
         with open(output_file_path, 'w') as outfile:
             outfile.write(obfuscated_content)
@@ -129,7 +160,9 @@ def main():
             args.output_file,
             substitution=args.substitution,
             shuffle=args.shuffle,
-            key=args.key
+            key=args.key,
+            seed=args.seed,
+            reverse=args.reverse
         )
     except FileNotFoundError:
         sys.exit(1)
