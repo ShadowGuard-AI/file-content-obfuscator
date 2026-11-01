@@ -23,6 +23,11 @@ def setup_argparse():
     parser.add_argument("-l", "--log_level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level.")
     return parser
 
+# A flat shift of every code point, with no wraparound. Undoing it is the
+# same operation with the negated key, which the help text never says;
+# anyone reversing a substituted file has to know to pass -k with the
+# opposite sign. The range precheck in obfuscate_file exists because a
+# shift that leaves the Unicode range has no character to land on.
 def substitute_chars(content, key):
     """
     Applies a substitution cipher to the content.
@@ -39,6 +44,11 @@ def substitute_chars(content, key):
         obfuscated_content += chr(ord(char) + key)  # Simple substitution
     return obfuscated_content
 
+# Shuffle and unshuffle each rebuild the same index permutation from the
+# seed. That only inverts correctly when the content length is also the
+# same, because the permutation is over positions. Reversing a file of a
+# different length runs without error and produces scrambled text, with
+# no signal that the length was wrong.
 def shuffle_chars(content, seed):
     rng = random.Random(seed)
     indices = list(range(len(content)))
@@ -50,6 +60,9 @@ def unshuffle_chars(content, seed):
     rng = random.Random(seed)
     indices = list(range(len(content)))
     rng.shuffle(indices)
+    # The inverse places each shuffled character back at the position it was
+    # taken from. shuffle_chars gathered content[i] in permuted order, so
+    # this loop walks the same permutation in the opposite direction.
     restored = [''] * len(content)
     for new_pos, old_pos in enumerate(indices):
         restored[old_pos] = content[new_pos]
@@ -88,6 +101,9 @@ def obfuscate_file(input_file_path, output_file_path, substitution=False, shuffl
         if not substitution and not shuffle:
             raise ValueError("No obfuscation method selected.  Use -s or -r to enable.")
 
+        # The file is read as text in the platform default encoding. A binary
+        # file can raise UnicodeDecodeError here, which is a ValueError, so it
+        # surfaces as the generic value error path in main, exit 1.
         with open(input_file_path, 'r') as infile:
             content = infile.read()
 
@@ -98,6 +114,10 @@ def obfuscate_file(input_file_path, output_file_path, substitution=False, shuffl
             if content:
                 highest = max(ord(c) for c in content)
                 lowest = min(ord(c) for c in content)
+                # Only the extreme characters are checked, which is enough: every other
+                # character sits between them, so if the extremes stay inside the valid
+                # range after the shift, all of them do. Checking first also means a bad
+                # key fails before any output exists, not halfway through building it.
                 if highest + key > 0x10FFFF or lowest + key < 0:
                     raise ValueError(
                         f"Substitution key {key} is out of range for this content: "
@@ -107,6 +127,10 @@ def obfuscate_file(input_file_path, output_file_path, substitution=False, shuffl
         obfuscated_content = content
 
         if substitution:
+        # Order is fixed: substitution first, shuffle second. A combined run is
+        # therefore reversed in the opposite order, unshuffle with --reverse
+        # first and then a substitution pass with the negated key. --reverse
+        # alone does not touch substituted text.
             obfuscated_content = substitute_chars(obfuscated_content, key)
             logging.info("Applied substitution cipher.")
 
